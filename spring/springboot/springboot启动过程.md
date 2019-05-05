@@ -155,6 +155,7 @@ private ConfigurableEnvironment prepareEnvironment(SpringApplicationRunListeners
 
 ```java
 //SpringApplicationRunListeners：
+//这里之后，environment中的PropertySources中已经包含了所有的配置文件了
 public void environmentPrepared(ConfigurableEnvironment environment) {
     Iterator var2 = this.listeners.iterator();
 
@@ -473,7 +474,7 @@ public void contextLoaded(ConfigurableApplicationContext context) {
 //SpringApplication：
 private void refreshContext(ConfigurableApplicationContext context) {
 	this.refresh(context);
-    //注册shutdown后的逻辑
+    //9.14 注册shutdown后的逻辑
     context.registerShutdownHook();
 }
 //ServletWebServerApplicationContext中的方法
@@ -484,30 +485,37 @@ public final void refresh() throws BeansException, IllegalStateException {
 public void refresh() throws BeansException, IllegalStateException {
     Object var1 = this.startupShutdownMonitor;
     synchronized(this.startupShutdownMonitor) {
-        //9.1 主要设置一些环境
+        //9.1 初始化一些配置属性，验证配置文件
         this.prepareRefresh();
         //9.2 简单的获取beanFactory
         ConfigurableListableBeanFactory beanFactory = this.obtainFreshBeanFactory();
-        //9.3 简单设置一些beanfactory属性
+        //9.3 将context中的一些属性设置到beanFactory中
         this.prepareBeanFactory(beanFactory);
 	    //9.4 注册Scope相关的类，扫描包和注解进行注册
         this.postProcessBeanFactory(beanFactory);
-        //9.5 
+        //9.5 和业务类、自动配置类有关
         this.invokeBeanFactoryPostProcessors(beanFactory);
+        //9.6 分类、排序、注册（注入）所有的BeanPostProcessors
         this.registerBeanPostProcessors(beanFactory);
+        //9.7 国际化
         this.initMessageSource();
+        //9.8 初始化多播事件
         this.initApplicationEventMulticaster();
+        //9.9 主要创建并初始化容器
         this.onRefresh();
+        //9.10 向多播事件注册监听者
         this.registerListeners();
+        //9.11 主要是初始化单例
         this.finishBeanFactoryInitialization(beanFactory);
+        //9.12 主要是开启Web容器
         this.finishRefresh();
-		//清除一些缓存
+	    //9.13 清除一些缓存
         this.resetCommonCaches();
     }
 }
 ```
 
-#### 9.1 prepareRefresh()
+#### 9.1 prepareRefresh()：初始化一些配置属性，验证配置文件
 
 ```java
 //AnnotationConfigServletWebServerApplicationContext
@@ -527,25 +535,19 @@ protected void prepareRefresh() {
             this.logger.debug("Refreshing " + this.getDisplayName());
         }
     }
-	//9.1.1
+	//9.1.1 初始化servletContextInitParams，servletConfigInitParams如果有的话
     this.initPropertySources();
-
+	//9.1.2 验证所有的requiredProperties是否都存在，否则报错
     this.getEnvironment().validateRequiredProperties();
-    if (this.earlyApplicationListeners == null) {
-        this.earlyApplicationListeners = new LinkedHashSet(this.applicationListeners);
-    } else {
-        this.applicationListeners.clear();
-        this.applicationListeners.addAll(this.earlyApplicationListeners);
-    }
-
     this.earlyApplicationEvents = new LinkedHashSet();
+
 }
 ```
 
-#### 9.1.1 initPropertySources()：
+##### 9.1.1 initPropertySources()：初始化servletContextInitParams，servletConfigInitParams如果有的话
 
 ```java
-//----------------------this.initPropertySources();
+//初始化servletContextInitParams，servletConfigInitParams如果有的话
 //GenericWebApplicationContext
 protected void initPropertySources() {
     ConfigurableEnvironment env = this.getEnvironment();
@@ -556,10 +558,10 @@ protected void initPropertySources() {
 }
 //StandardServletEnvironment
 public void initPropertySources(@Nullable ServletContext servletContext, @Nullable ServletConfig servletConfig) {
-    //这里的PropertySources中已经包含了所有的配置文件了
     WebApplicationContextUtils.initServletPropertySources(this.getPropertySources(), servletContext, servletConfig);
 }
 //WebApplicationContextUtils
+//初始化servletContextInitParams，servletConfigInitParams如果有的话
 public static void initServletPropertySources(MutablePropertySources sources, @Nullable ServletContext servletContext, @Nullable ServletConfig servletConfig) {
     Assert.notNull(sources, "'propertySources' must not be null");
     String name = "servletContextInitParams";
@@ -574,41 +576,77 @@ public static void initServletPropertySources(MutablePropertySources sources, @N
 }
 ```
 
+##### 9.1.2 validateRequiredProperties()：验证所有的requiredProperties是否都存在，否则报错
 
+```java
+//AbstractPropertyResolver
+public void validateRequiredProperties() {
+    MissingRequiredPropertiesException ex = new MissingRequiredPropertiesException();
+    Iterator var2 = this.requiredProperties.iterator();//一般都是0
+    while(var2.hasNext()) {
+        String key = (String)var2.next();
+        if (this.getProperty(key) == null) {
+            ex.addMissingRequiredProperty(key);
+        }
+    }
+    if (!ex.getMissingRequiredProperties().isEmpty()) {
+        throw ex;
+    }
+}
+```
 
-**2.2 this.obtainFreshBeanFactory()**
+#### 9.2 obtainFreshBeanFactory()：简单获取BeanFactory
+
+```java
+//AbstractApplicationContext：简单获取BeanFactory
+protected ConfigurableListableBeanFactory obtainFreshBeanFactory() {
+    this.refreshBeanFactory();
+    //这里获取的BeanFactory里的属性没有业务相关的类，全是引擎需要的类
+    return this.getBeanFactory();
+}
+```
+
+#### 9.3 prepareBeanFactory()：将context中的一些属性设置到beanFactory中
 
 ```java
 //AbstractApplicationContext
-protected ConfigurableListableBeanFactory obtainFreshBeanFactory() {
-    this.refreshBeanFactory();
-    return this.getBeanFactory();
-}
-
-//GenericApplicationContext,如果刷新过报错
-protected final void refreshBeanFactory() throws IllegalStateException {
-    if (!this.refreshed.compareAndSet(false, true)) {
-        throw new IllegalStateException("GenericApplicationContext does not support multiple refresh attempts: just call 'refresh' once");
-    } else {
-        this.beanFactory.setSerializationId(this.getId());
+protected void prepareBeanFactory(ConfigurableListableBeanFactory beanFactory) {
+    beanFactory.setBeanClassLoader(this.getClassLoader());
+    beanFactory.setBeanExpressionResolver(new StandardBeanExpressionResolver(beanFactory.getBeanClassLoader()));
+    beanFactory.addPropertyEditorRegistrar(new ResourceEditorRegistrar(this, this.getEnvironment()));
+    beanFactory.addBeanPostProcessor(new ApplicationContextAwareProcessor(this));
+    beanFactory.ignoreDependencyInterface(EnvironmentAware.class);
+    beanFactory.ignoreDependencyInterface(EmbeddedValueResolverAware.class);
+    beanFactory.ignoreDependencyInterface(ResourceLoaderAware.class);
+    beanFactory.ignoreDependencyInterface(ApplicationEventPublisherAware.class);
+    beanFactory.ignoreDependencyInterface(MessageSourceAware.class);
+    beanFactory.ignoreDependencyInterface(ApplicationContextAware.class);
+    beanFactory.registerResolvableDependency(BeanFactory.class, beanFactory);
+    beanFactory.registerResolvableDependency(ResourceLoader.class, this);
+    beanFactory.registerResolvableDependency(ApplicationEventPublisher.class, this);
+    beanFactory.registerResolvableDependency(ApplicationContext.class, this);
+    beanFactory.addBeanPostProcessor(new ApplicationListenerDetector(this));
+    if (beanFactory.containsBean("loadTimeWeaver")) {
+        beanFactory.addBeanPostProcessor(new LoadTimeWeaverAwareProcessor(beanFactory));
+        beanFactory.setTempClassLoader(new ContextTypeMatchClassLoader(beanFactory.getBeanClassLoader()));
+    }
+    if (!beanFactory.containsLocalBean("environment")) {
+        beanFactory.registerSingleton("environment", this.getEnvironment());
+    }
+    if (!beanFactory.containsLocalBean("systemProperties")) {
+        beanFactory.registerSingleton("systemProperties", this.getEnvironment().getSystemProperties());
+    }
+    if (!beanFactory.containsLocalBean("systemEnvironment")) {
+        beanFactory.registerSingleton("systemEnvironment", this.getEnvironment().getSystemEnvironment());
     }
 }
-//GenericApplicationContext
-public final ConfigurableListableBeanFactory getBeanFactory() {
-    return this.beanFactory;
-}
 ```
 
-**2.3 this.prepareBeanFactory(beanFactory)**
-
-```java
-//简单设置一些beanfactory属性
-```
-
-**2.4 this.postProcessBeanFactory(beanFactory)**
+#### 9.4 postProcessBeanFactory()：扫描包和注解，添加Web相关Processor，并向beanFactory注册几个Scope类
 
 ```java
 //AnnotationConfigServletWebServerApplicationContext
+//这里的basePackages和annotatedClasses是在哪了设置的？
 protected void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) {
     super.postProcessBeanFactory(beanFactory);
     //如果有basePackages，则扫描包，将包中指定的bean注入
@@ -620,17 +658,18 @@ protected void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactor
         this.reader.register(ClassUtils.toClassArray(this.annotatedClasses));
     }
 }
-//ServletWebServerApplicationContext：super到这，
+//ServletWebServerApplicationContext：super到这，添加Web相关Processor
 protected void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) {
     beanFactory.addBeanPostProcessor(new WebApplicationContextServletContextAwareProcessor(this));
     beanFactory.ignoreDependencyInterface(ServletContextAware.class);
+    //添加beanFactory的resolvableDependencies属性
     this.registerWebApplicationScopes();
 }
 //ServletWebServerApplicationContext：
 private void registerWebApplicationScopes() {
     //这里设置的scopes的map属性-----00
     ServletWebServerApplicationContext.ExistingWebApplicationScopes existingScopes = new ServletWebServerApplicationContext.ExistingWebApplicationScopes(this.getBeanFactory());
-    //向beanFactory中注册急着作用域：ServletRequest、ServletResponse、HttpSession、WebRequest、RequestScope、SessionScope
+    //向beanFactory中注册几个作用域：ServletRequest、ServletResponse、HttpSession、WebRequest、RequestScope、SessionScope
     WebApplicationContextUtils.registerWebApplicationScopes(this.getBeanFactory());
     //注册scopes这个map中的scope到beanfactory中，这个map-----00
     //Scope scope = beanFactory.getRegisteredScope(scopeName);-----00
@@ -638,12 +677,17 @@ private void registerWebApplicationScopes() {
 }
 ```
 
-**2.5 this.invokeBeanFactoryPostProcessors(beanFactory)**
+#### 9.5 invokeBeanFactoryPostProcessors()：递归查找Configuration类，重要！
 
 ```java
 //AbstractApplicationContext
 protected void invokeBeanFactoryPostProcessors(ConfigurableListableBeanFactory beanFactory) {
     //分类并排序所有的BeanDefinitionRegistry(这里并没有注册，要到下一个方法)
+    //这里查找了业务类、自动配置类
+    //具体的单独分析：https://blog.csdn.net/liaokailin/article/details/49107209
+    //https://blog.csdn.net/qq_26000415/article/details/78917682
+    //https://www.cnblogs.com/jiaoqq/p/7678037.html
+    //https://www.jianshu.com/p/b61809506d0b
     PostProcessorRegistrationDelegate.invokeBeanFactoryPostProcessors(beanFactory, this.getBeanFactoryPostProcessors());
     //转载两个PostProcessor,一般不进来
     if (beanFactory.getTempClassLoader() == null && beanFactory.containsBean("loadTimeWeaver")) {
@@ -653,7 +697,146 @@ protected void invokeBeanFactoryPostProcessors(ConfigurableListableBeanFactory b
 }
 ```
 
-**2.6 registerBeanPostProcessors()**
+##### 9.5.1 invokeBeanFactoryPostProcessors()：
+
+```java
+//PostProcessorRegistrationDelegate
+public static void invokeBeanFactoryPostProcessors(ConfigurableListableBeanFactory beanFactory, List<BeanFactoryPostProcessor> beanFactoryPostProcessors) {
+    Set<String> processedBeans = new HashSet();
+    ArrayList regularPostProcessors;
+    ArrayList registryProcessors;
+    int var9;
+    ArrayList currentRegistryProcessors;
+    String[] postProcessorNames;
+    if (beanFactory instanceof BeanDefinitionRegistry) {
+        BeanDefinitionRegistry registry = (BeanDefinitionRegistry)beanFactory;
+        regularPostProcessors = new ArrayList();
+        registryProcessors = new ArrayList();
+        Iterator var6 = beanFactoryPostProcessors.iterator();
+        //注册postProcessor
+        while(var6.hasNext()) {
+            BeanFactoryPostProcessor postProcessor = (BeanFactoryPostProcessor)var6.next();
+            if (postProcessor instanceof BeanDefinitionRegistryPostProcessor) {
+                BeanDefinitionRegistryPostProcessor registryProcessor = (BeanDefinitionRegistryPostProcessor)postProcessor;
+                registryProcessor.postProcessBeanDefinitionRegistry(registry);
+                registryProcessors.add(registryProcessor);
+            } else {
+                regularPostProcessors.add(postProcessor);
+            }
+        }
+
+        currentRegistryProcessors = new ArrayList();
+        postProcessorNames = beanFactory.getBeanNamesForType(BeanDefinitionRegistryPostProcessor.class, true, false);
+        String[] var16 = postProcessorNames;
+        var9 = postProcessorNames.length;
+
+        int var10;
+        String ppName;
+        for(var10 = 0; var10 < var9; ++var10) {
+            ppName = var16[var10];
+            if (beanFactory.isTypeMatch(ppName, PriorityOrdered.class)) {
+                currentRegistryProcessors.add(beanFactory.getBean(ppName, BeanDefinitionRegistryPostProcessor.class));
+                processedBeans.add(ppName);
+            }
+        }
+        //currentRegistryProcessors有个关键的类：ConfigurationClassPostProcessor
+        sortPostProcessors(currentRegistryProcessors, beanFactory);
+        registryProcessors.addAll(currentRegistryProcessors);
+        //9.5.1.1 关键：这里注册业务了、自动配置类
+        invokeBeanDefinitionRegistryPostProcessors(currentRegistryProcessors, registry);
+        currentRegistryProcessors.clear();
+        postProcessorNames = beanFactory.getBeanNamesForType(BeanDefinitionRegistryPostProcessor.class, true, false);
+        var16 = postProcessorNames;
+        var9 = postProcessorNames.length;
+
+        for(var10 = 0; var10 < var9; ++var10) {
+            ppName = var16[var10];
+            if (!processedBeans.contains(ppName) && beanFactory.isTypeMatch(ppName, Ordered.class)) {
+                currentRegistryProcessors.add(beanFactory.getBean(ppName, BeanDefinitionRegistryPostProcessor.class));
+                processedBeans.add(ppName);
+            }
+        }
+
+        sortPostProcessors(currentRegistryProcessors, beanFactory);
+        registryProcessors.addAll(currentRegistryProcessors);
+        invokeBeanDefinitionRegistryPostProcessors(currentRegistryProcessors, registry);
+        currentRegistryProcessors.clear();
+        boolean reiterate = true;
+
+        while(reiterate) {
+            reiterate = false;
+            postProcessorNames = beanFactory.getBeanNamesForType(BeanDefinitionRegistryPostProcessor.class, true, false);
+            String[] var19 = postProcessorNames;
+            var10 = postProcessorNames.length;
+
+            for(int var26 = 0; var26 < var10; ++var26) {
+                String ppName = var19[var26];
+                if (!processedBeans.contains(ppName)) {
+                    currentRegistryProcessors.add(beanFactory.getBean(ppName, BeanDefinitionRegistryPostProcessor.class));
+                    processedBeans.add(ppName);
+                    reiterate = true;
+                }
+            }
+
+            sortPostProcessors(currentRegistryProcessors, beanFactory);
+            registryProcessors.addAll(currentRegistryProcessors);
+            invokeBeanDefinitionRegistryPostProcessors(currentRegistryProcessors, registry);
+            currentRegistryProcessors.clear();
+        }
+
+        invokeBeanFactoryPostProcessors((Collection)registryProcessors, (ConfigurableListableBeanFactory)beanFactory);
+        invokeBeanFactoryPostProcessors((Collection)regularPostProcessors, (ConfigurableListableBeanFactory)beanFactory);
+    } else {
+        invokeBeanFactoryPostProcessors((Collection)beanFactoryPostProcessors, (ConfigurableListableBeanFactory)beanFactory);
+    }
+
+    String[] postProcessorNames = beanFactory.getBeanNamesForType(BeanFactoryPostProcessor.class, true, false);
+    regularPostProcessors = new ArrayList();
+    registryProcessors = new ArrayList();
+    currentRegistryProcessors = new ArrayList();
+    postProcessorNames = postProcessorNames;
+    int var20 = postProcessorNames.length;
+
+    String ppName;
+    for(var9 = 0; var9 < var20; ++var9) {
+        ppName = postProcessorNames[var9];
+        if (!processedBeans.contains(ppName)) {
+            if (beanFactory.isTypeMatch(ppName, PriorityOrdered.class)) {
+                regularPostProcessors.add(beanFactory.getBean(ppName, BeanFactoryPostProcessor.class));
+            } else if (beanFactory.isTypeMatch(ppName, Ordered.class)) {
+                registryProcessors.add(ppName);
+            } else {
+                currentRegistryProcessors.add(ppName);
+            }
+        }
+    }
+
+    sortPostProcessors(regularPostProcessors, beanFactory);
+    invokeBeanFactoryPostProcessors((Collection)regularPostProcessors, (ConfigurableListableBeanFactory)beanFactory);
+    List<BeanFactoryPostProcessor> orderedPostProcessors = new ArrayList();
+    Iterator var21 = registryProcessors.iterator();
+
+    while(var21.hasNext()) {
+        String postProcessorName = (String)var21.next();
+        orderedPostProcessors.add(beanFactory.getBean(postProcessorName, BeanFactoryPostProcessor.class));
+    }
+
+    sortPostProcessors(orderedPostProcessors, beanFactory);
+    invokeBeanFactoryPostProcessors((Collection)orderedPostProcessors, (ConfigurableListableBeanFactory)beanFactory);
+    List<BeanFactoryPostProcessor> nonOrderedPostProcessors = new ArrayList();
+    Iterator var24 = currentRegistryProcessors.iterator();
+
+    while(var24.hasNext()) {
+        ppName = (String)var24.next();
+        nonOrderedPostProcessors.add(beanFactory.getBean(ppName, BeanFactoryPostProcessor.class));
+    }
+
+    invokeBeanFactoryPostProcessors((Collection)nonOrderedPostProcessors, (ConfigurableListableBeanFactory)beanFactory);
+    beanFactory.clearMetadataCache();
+}
+```
+
+#### 9.6 registerBeanPostProcessors()：分类、排序、注册（注入）所有的BeanPostProcessors
 
 ```java
 //AbstractApplicationContext
@@ -661,25 +844,26 @@ protected void invokeBeanFactoryPostProcessors(ConfigurableListableBeanFactory b
 protected void registerBeanPostProcessors(ConfigurableListableBeanFactory beanFactory) {
     PostProcessorRegistrationDelegate.registerBeanPostProcessors(beanFactory, this);
 }
-
 ```
 
-**2.7 initMessageSource()**
+#### 9.7 initMessageSource()：国际化
 
 ```java
 //主要注册了下面这个类，说是用来国际化的
+//AbstractApplicationContext
 beanFactory.registerSingleton("messageSource", this.messageSource);
 ```
 
-**2.8 initApplicationEventMulticaster()**
+#### 9.8 initApplicationEventMulticaster()：注册多播事件
 
 ```java
 //主要就是注册下面这个类，事件多播？
+//AbstractApplicationContext
 this.applicationEventMulticaster = new SimpleApplicationEventMulticaster(beanFactory);
 beanFactory.registerSingleton("applicationEventMulticaster", this.applicationEventMulticaster);
 ```
 
-**2.9 onRefresh()**
+#### 9.9 onRefresh()：主要是创建并初始化Web容器
 
 ```java
 ServletWebServerApplicationContext
@@ -705,6 +889,7 @@ private void createWebServer() {
 	} else if (servletContext != null) {//如果不为null，从这里创建容器，一般不走这
 		this.getSelfInitializer().onStartup(servletContext);
 	}
+	//1
 	this.initPropertySources();
 }
 
@@ -728,6 +913,7 @@ public WebServer getWebServer(ServletContextInitializer... initializers) {
 }
 //GenericWebApplicationContext
 //初始化ServletSources
+//1
 protected void initPropertySources() {
     ConfigurableEnvironment env = this.getEnvironment();
     if (env instanceof ConfigurableWebEnvironment) {
@@ -754,7 +940,7 @@ public static void initServletPropertySources(MutablePropertySources sources, @N
 }
 ```
 
-**2.10 registerListeners()** 
+#### 9.10 registerListeners()：向多播事件中注册3个监听者
 
 ```java
 //主要就做了下面3件事情
@@ -763,7 +949,7 @@ this.getApplicationEventMulticaster().addApplicationListenerBean(listenerBeanNam
 this.getApplicationEventMulticaster().multicastEvent(earlyEvent);
 ```
 
-**2.11 finishBeanFactoryInitialization()**
+#### 9.11 finishBeanFactoryInitialization()：初始化单例
 
 ```java
 protected void finishBeanFactoryInitialization(ConfigurableListableBeanFactory beanFactory) {
@@ -862,7 +1048,7 @@ public void preInstantiateSingletons() throws BeansException {
 }
 ```
 
-**2.12 finishRefresh()**
+#### 9.12 finishRefresh()：初始化生命周期，开启Web容器
 
 ```java
 //ServletWebServerApplicationContext
@@ -900,6 +1086,98 @@ private void startBeans(boolean autoStartupOnly) {
 }
 ```
 
+#### 9.13 resetCommonCaches()
+
+```java
+//AbstractApplicationContext
+protected void resetCommonCaches() {
+    ReflectionUtils.clearCache();
+    AnnotationUtils.clearCache();
+    ResolvableType.clearCache();
+    CachedIntrospectionResults.clearClassLoader(this.getClassLoader());
+}
+```
+
+#### 9.14 registerShutdownHook()：注册应用关闭时的钩子
+
+```java
+//AbstractApplicationContext
+public void registerShutdownHook() {
+    if (this.shutdownHook == null) {
+        this.shutdownHook = new Thread() {
+            public void run() {
+                synchronized(AbstractApplicationContext.this.startupShutdownMonitor) {
+                    AbstractApplicationContext.this.doClose();
+                }
+            }
+        };
+        Runtime.getRuntime().addShutdownHook(this.shutdownHook);
+    }
+
+}
+```
+
+### 10 afterRefresh()：空实现
+
+```java
+//SpringApplication
+protected void afterRefresh(ConfigurableApplicationContext context, ApplicationArguments args) {
+}
+```
+
+### 11 listeners.started()：通知Run监听者应用已开启
+
+```java
+//SpringApplicationRunListeners
+public void started(ConfigurableApplicationContext context) {
+    Iterator var2 = this.listeners.iterator();
+
+    while(var2.hasNext()) {
+        SpringApplicationRunListener listener = (SpringApplicationRunListener)var2.next();
+        listener.started(context);
+    }
+
+}
+```
+
+### 12 callRunners()：调用 ApplicationRunner 或者 CommandLineRunner 的运行方法
+
+```java
+//SpringApplication
+private void callRunners(ApplicationContext context, ApplicationArguments args) {
+    List<Object> runners = new ArrayList();
+    runners.addAll(context.getBeansOfType(ApplicationRunner.class).values());
+    runners.addAll(context.getBeansOfType(CommandLineRunner.class).values());
+    AnnotationAwareOrderComparator.sort(runners);
+    Iterator var4 = (new LinkedHashSet(runners)).iterator();
+
+    while(var4.hasNext()) {
+        Object runner = var4.next();
+        if (runner instanceof ApplicationRunner) {
+            this.callRunner((ApplicationRunner)runner, args);
+        }
+
+        if (runner instanceof CommandLineRunner) {
+            this.callRunner((CommandLineRunner)runner, args);
+        }
+    }
+
+}
+```
+
+### 13 listeners.running()：通知Run监听者应用已运行
+
+```java
+//SpringApplicationRunListeners
+public void running(ConfigurableApplicationContext context) {
+    Iterator var2 = this.listeners.iterator();
+    while(var2.hasNext()) {
+        SpringApplicationRunListener listener = (SpringApplicationRunListener)var2.next();
+        listener.running(context);
+    }
+}
+```
+
 ```java
 //初始化BeanDefinition加载器，关键：其中有三个子加载器
 //1. xmlReader：解析加载XML里的bean 
@@ -919,12 +1197,17 @@ BeanDefinitionLoader(BeanDefinitionRegistry registry, Object... sources) {
 }
 ```
 
+
+
+
+
+
+
+https://blog.csdn.net/liaokailin/article/details/49107209
+https://blog.csdn.net/qq_26000415/article/details/78917682
+https://www.cnblogs.com/jiaoqq/p/7678037.html
+https://www.jianshu.com/p/b61809506d0b
+
 https://www.cnblogs.com/saaav/p/6292524.html
-
-
-
-![](./img/listeners.png)
-
-![](./img/applicationRunListeners.png)
 
 https://www.cnblogs.com/saaav/tag/spring%20boot/
