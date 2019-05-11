@@ -1,6 +1,6 @@
 [TOC]
 
-## 0 SpringApplication.run()
+# 0 SpringApplication.run()
 
 ```java
 SpringApplication.run(SpringbootLearnApplication.class, args);//先初始化SpringApplication类，再调用它的run方法
@@ -53,9 +53,8 @@ public ConfigurableApplicationContext run(String... args) {
     listeners.starting();
 
     Collection exceptionReporters;
-    //args为main入口参数
     ApplicationArguments applicationArguments = new DefaultApplicationArguments(args);
-    //4 查找配置文件
+    //4 查找配置文件(包括：通过main入口参数args，解析commandLines！)
     ConfigurableEnvironment environment = this.prepareEnvironment(listeners, applicationArguments);
     //获取System中spring.beaninfo.ignore属性，不知道干啥的
     this.configureIgnoreBeanInfo(environment);
@@ -92,7 +91,7 @@ public ConfigurableApplicationContext run(String... args) {
     return context;
 }
 ```
-### 1 configureHeadlessProperty()：远程登录使用的服务器配置
+# 1 configureHeadlessProperty()：远程登录使用的服务器配置
 
 ```java
 //SpringApplication：设置使用Headless，对于只有远程登录使用的服务器来说这样性能要好一些
@@ -101,7 +100,7 @@ private void configureHeadlessProperty() {
 }
 ```
 
-### 2 getRunListeners()：获取spring.factory中的SpringApplicationRunListeners，并创建所有的监听器
+# 2 getRunListeners()：获取spring.factory中的SpringApplicationRunListeners，并创建所有的监听器
 
 ```java
 //SpringApplication：查找spring.factory中的SpringApplicationRunListeners，并创建所有的监听器
@@ -111,7 +110,7 @@ private SpringApplicationRunListeners getRunListeners(String[] args) {
 }
 ```
 
-### 3 listeners.starting()：通知所有Run监听器开始运行
+# 3 listeners.starting()：通知所有Run监听器开始运行
 
 ```java
 //SpringApplicationRunListeners：
@@ -124,27 +123,80 @@ public void starting() {
 }
 ```
 
-### 4 prepareEnvironment()：关键是获取配置文件
+# 4 prepareEnvironment()：关键是获取配置文件
 
 ```java
 //SpringApplication：
 private ConfigurableEnvironment prepareEnvironment(SpringApplicationRunListeners listeners, ApplicationArguments applicationArguments) {
     //根据应用类型，创建应用环境：如得到系统的参数和JVM等参数，等
     ConfigurableEnvironment environment = this.getOrCreateEnvironment();
-    //创建环境并配置
+    //4.1 创建环境并配置
     this.configureEnvironment((ConfigurableEnvironment)environment, applicationArguments.getSourceArgs());
-    //4.1 
+    //4.2 Run监听器准备配置环境（重要-获取所有配置文件）
     listeners.environmentPrepared((ConfigurableEnvironment)environment);
+    //4.3 不知道干啥
     this.bindToSpringApplication((ConfigurableEnvironment)environment);
     if (!this.isCustomEnvironment) {
         environment = (new EnvironmentConverter(this.getClassLoader())).convertEnvironmentIfNecessary((ConfigurableEnvironment)environment, this.deduceEnvironmentClass());
     }
-
+	//加一个ConfigurationPropertySources
     ConfigurationPropertySources.attach((Environment)environment);
     return (ConfigurableEnvironment)environment;
 }
 ```
-#### 4.1 listeners.environmentPrepared(）：Run监听器准备配置环境
+## 4.1 configureEnvironment()：配置defaultProperties和commandLineArgs属性
+
+```java
+protected void configureEnvironment(ConfigurableEnvironment environment, String[] args) {
+    if (this.addConversionService) {
+        ConversionService conversionService = ApplicationConversionService.getSharedInstance();
+        environment.setConversionService((ConfigurableConversionService)conversionService);
+    }
+	//4.1.1 如果有defaultProperties和commandLineArgs属性则配置
+    //defaultProperties还真不知道在哪设值，因为new完SpringApplicaiton类之后，里面就开始这一步了，
+    //不知道在哪一步调用springApplicaiton.setDefaultProperties(...)；
+    this.configurePropertySources(environment, args);
+    //4.1.2 获取spring.profiles.active
+    this.configureProfiles(environment, args);
+}
+```
+
+### 4.1.1 如果有defaultProperties和commandLineArgs属性则配置
+
+```java
+protected void configurePropertySources(ConfigurableEnvironment environment, String[] args) {
+    MutablePropertySources sources = environment.getPropertySources();
+    if (this.defaultProperties != null && !this.defaultProperties.isEmpty()) {
+        sources.addLast(new MapPropertySource("defaultProperties", this.defaultProperties));
+    }
+    if (this.addCommandLineProperties && args.length > 0) {
+        String name = "commandLineArgs";
+        if (sources.contains(name)) {
+            PropertySource<?> source = sources.get(name);
+            CompositePropertySource composite = new CompositePropertySource(name);
+            composite.addPropertySource(new SimpleCommandLinePropertySource("springApplicationCommandLineArgs", args));
+            composite.addPropertySource(source);
+            sources.replace(name, composite);
+        } else {
+            sources.addFirst(new SimpleCommandLinePropertySource(args));
+        }
+    }
+}
+```
+
+### 4.1.2 获取spring.profiles.active—只从4个路径中查询
+
+```java
+//这个profiles参数目前仅仅在servletConfigInitParams、servletContextInitParams、systemProperties、systemEnvironment中查询，可以设置用户变量或环境变量即可
+protected void configureProfiles(ConfigurableEnvironment environment, String[] args) {
+    environment.getActiveProfiles();
+    Set<String> profiles = new LinkedHashSet(this.additionalProfiles);
+    profiles.addAll(Arrays.asList(environment.getActiveProfiles()));
+    environment.setActiveProfiles(StringUtils.toStringArray(profiles));
+}
+```
+
+## 4.2 listeners.environmentPrepared(）：Run监听器准备配置环境（重要-获取所有配置文件）
 
 - 运行监听器中的环境配置类，重要的是ConfigFileApplicationListener，来读取配置文件
 - 查找spring.factories中EnvironmentPostProcessor的类
@@ -156,6 +208,7 @@ private ConfigurableEnvironment prepareEnvironment(SpringApplicationRunListeners
 ```java
 //SpringApplicationRunListeners：
 //这里之后，environment中的PropertySources中已经包含了所有的配置文件了
+//这里的listeners就一个：EventPublishingRunListener
 public void environmentPrepared(ConfigurableEnvironment environment) {
     Iterator var2 = this.listeners.iterator();
 
@@ -166,12 +219,20 @@ public void environmentPrepared(ConfigurableEnvironment environment) {
 }
 //EventPublishingRunListener：
 public void environmentPrepared(ConfigurableEnvironment environment) {
+    //4.2.1
     this.initialMulticaster.multicastEvent(new ApplicationEnvironmentPreparedEvent(this.application, this.args, environment));
 }
+```
+
+### 4.2.1 通过`SimpleApplicationEventMulticaster`类来多播调用7个监听事件
+
+- 遍历调用7个监听器
+
+```java
 //SimpleApplicationEventMulticaster：
 public void multicastEvent(ApplicationEvent event, @Nullable ResolvableType eventType) {
     ResolvableType type = eventType != null ? eventType : this.resolveDefaultEventType(event);
-    //
+    //一般共有7个listners：ConfigFileAppLst、AnsiOutputAppLst、LoggingAppLst、ClasspathLoggingAppLst、BackgroundPreinitializer、DelegatingAppLst、FileEncodingAppLst
     Iterator var4 = this.getApplicationListeners(event, type).iterator();
     while(var4.hasNext()) {
         ApplicationListener<?> listener = (ApplicationListener)var4.next();
@@ -181,6 +242,7 @@ public void multicastEvent(ApplicationEvent event, @Nullable ResolvableType even
                 this.invokeListener(listener, event);
             });
         } else {
+            //执行方法
             this.invokeListener(listener, event);
         }
     }
@@ -188,42 +250,106 @@ public void multicastEvent(ApplicationEvent event, @Nullable ResolvableType even
 //ConfigFileApplicationListener：这个类很重要，操作读取各种配置文件的类
 public void onApplicationEvent(ApplicationEvent event) {
     if (event instanceof ApplicationEnvironmentPreparedEvent) {
-        //因为是Environment，所以走这
+        //4.2.1.1 因为是Environment，所以走这
         this.onApplicationEnvironmentPreparedEvent((ApplicationEnvironmentPreparedEvent)event);
     }
     if (event instanceof ApplicationPreparedEvent) {
         this.onApplicationPreparedEvent(event);
     }
 }
+```
+
+#### 4.2.1.1  调用7个监听中的ConfigFileApplicationListener类来读取配置文件
+
+- 查找spring.factories中EnvironmentPostProcessor的类，这里有3个
+- 加上本身就是4个，在按Order排序
+- 遍历处理每个processor
+
+```java
 //ConfigFileApplicationListener：
 private void onApplicationEnvironmentPreparedEvent(ApplicationEnvironmentPreparedEvent event) {
     //查找spring.factories中EnvironmentPostProcessor的类，这里有3个
-    //SystemEnvironmentPropertySourceEnvironmentPostProcessor：读取设置系统参数，Java_HOME等，应该有bootStrapProperties里的参数， java 的一些命令 --pring.config.location='...';
+    //SystemEnvironmentPropertySourceEnvironmentPostProcessor：读取设置系统参数，Java_HOME等，应该有bootStrapProperties里的参数
     //SpringApplicationJsonEnvironmentPostProcessor：propertySources没有Json
     //CloudFoundryVvcapEnvironmentPostProcessor：没有
     List<EnvironmentPostProcessor> postProcessors = this.loadPostProcessors();
     //加上ConfigFileApplicationListener：关键是这个！！！
     postProcessors.add(this);
+    //按照AnnotationAwareOrderComparator类排序
     AnnotationAwareOrderComparator.sort(postProcessors);
     Iterator var3 = postProcessors.iterator();
-
     while(var3.hasNext()) {
         EnvironmentPostProcessor postProcessor = (EnvironmentPostProcessor)var3.next();
+        //按照每个processor做处理
         postProcessor.postProcessEnvironment(event.getEnvironment(), event.getSpringApplication());
     }
 }
+```
+
+##### 4.2.1.1.1 调用SystemEnvironmentPropertySourceEnvironmentPostProcessor处理器，处理systemEnvironment
+
+```java
 //SystemEnvironmentPropertySourceEnvironmentPostProcessor：
 public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
     String sourceName = "systemEnvironment";
     //本机的系统参数
     PropertySource<?> propertySource = environment.getPropertySources().get(sourceName);
     if (propertySource != null) {
-        //没变
+        //没变，包装了下吧
         this.replacePropertySource(environment, sourceName, propertySource);
     }
 }
+```
 
-//ConfigFileApplicationListener：关键，查找、读取配置文件默认在classpath:/,classpath:/config/,file:./,file:./config/，如果设置了spring.config.location，则指定扫描的配置文件路径，commaDelimitedListToStringArray（用逗号隔开可以表示多个路径），如果配置了spring.config.additional-location默认路径加上它
+##### 4.2.1.1.2 调用SpringApplicationJsonEnvironmentPostProcessor处理器，处理JsonProperty
+
+```java
+public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+    MutablePropertySources propertySources = environment.getPropertySources();
+    //在这4个配置文件中找spring.application.json和SPRING_APPLICATION_JSON的属性，用JsonParser来解析属性对应的值，最后添加到this.JsonPropertySource中
+  propertySources.stream().map(SpringApplicationJsonEnvironmentPostProcessor.JsonPropertyValue::get).filter(Objects::nonNull).findFirst().ifPresent((v) -> {
+        this.processJson(environment, v);
+    });
+}
+private void processJson(ConfigurableEnvironment environment, SpringApplicationJsonEnvironmentPostProcessor.JsonPropertyValue propertyValue) {
+    JsonParser parser = JsonParserFactory.getJsonParser();
+    Map<String, Object> map = parser.parseMap(propertyValue.getJson());
+    if (!map.isEmpty()) {
+        this.addJsonPropertySource(environment, new SpringApplicationJsonEnvironmentPostProcessor.JsonPropertySource(propertyValue, this.flatten(map)));
+    }
+
+}
+```
+
+##### 4.2.1.1.3 调用CloudFoundryVcapEnvironmentPostProcessor处理器，设置Vcap配置
+
+```java
+public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+    //环境是否包含：environment.containsProperty("VCAP_APPLICATION") || environment.containsProperty("VCAP_SERVICES");这两个key
+    if (CloudPlatform.CLOUD_FOUNDRY.isActive(environment)) {
+        //如果包含
+        Properties properties = new Properties();
+        JsonParser jsonParser = JsonParserFactory.getJsonParser();
+        this.addWithPrefix(properties, this.getPropertiesFromApplication(environment, jsonParser), "vcap.application.");
+        this.addWithPrefix(properties, this.getPropertiesFromServices(environment, jsonParser), "vcap.services.");
+        MutablePropertySources propertySources = environment.getPropertySources();
+        if (propertySources.contains("commandLineArgs")) {
+            propertySources.addAfter("commandLineArgs", new PropertiesPropertySource("vcap", properties));
+        } else {
+            propertySources.addFirst(new PropertiesPropertySource("vcap", properties));
+        }
+    }
+}
+```
+
+##### 4.2.1.1.4 调用ConfigFileApplicationListener加载配置文件——重要
+
+- 读取配置文件默认的路径：classpath:/,classpath:/config/,file:./,file:./config/
+- 如果设置了spring.config.location，则指定扫描的配置文件路径，commaDelimitedListToStringArray（用逗号隔开可以表示多个路径）
+- 如果配置了spring.config.additional-location默认路径加上它
+
+```java
+//ConfigFileApplicationListener，
 public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
     this.addPropertySources(environment, application.getResourceLoader());
 }
@@ -232,116 +358,136 @@ protected void addPropertySources(ConfigurableEnvironment environment, ResourceL
     RandomValuePropertySource.addToEnvironment(environment);
     (new ConfigFileApplicationListener.Loader(environment, resourceLoader)).load();
 }
+```
+
+###### 4.2.1.1.4.1 初始化文件加载器——包括placeholder、resourceLoader、propertyLoader
+
+- placeholder、resourceLoader是默认的
+- propertyLoader在spring.factories中查找
+
+```java
 //新建文件加载器
 Loader(ConfigurableEnvironment environment, ResourceLoader resourceLoader) {
     this.logger = ConfigFileApplicationListener.this.logger;
     this.loadDocumentsCache = new HashMap();
     this.environment = environment;
-    //新建各种解析器和加载器
+    //新建各种解析器和加载器，并将环境设置进去
     this.placeholdersResolver = new PropertySourcesPlaceholdersResolver(this.environment);
     this.resourceLoader = (ResourceLoader)(resourceLoader != null ? resourceLoader : new DefaultResourceLoader());
     //配置文件加载器，各个包都有自己的加载器来加载自己的文件，接口实现分离！
     //基本有两种，PropertiesPropertySourceLoader和YamlPropertySourceLoader！
     this.propertySourceLoaders = SpringFactoriesLoader.loadFactories(PropertySourceLoader.class, this.getClass().getClassLoader());
 }
-//真正的加载
-public void load() {
-    this.profiles = new LinkedList();
-    this.processedProfiles = new LinkedList();
-    this.activatedProfiles = false;
-    this.loaded = new LinkedHashMap();
-    //1
-    this.initializeProfiles();
-    while(!this.profiles.isEmpty()) {
-        ConfigFileApplicationListener.Profile profile = (ConfigFileApplicationListener.Profile)this.profiles.poll();
-        if (profile != null && !profile.isDefaultProfile()) {
-            this.addProfileToEnvironment(profile.getName());
-        }
-		//2
-        this.load(profile, this::getPositiveProfileFilter, this.addToLoaded(MutablePropertySources::addLast, false));
-        this.processedProfiles.add(profile);
-    }
+```
 
-    this.resetEnvironmentProfiles(this.processedProfiles);
-    this.load((ConfigFileApplicationListener.Profile)null, this::getNegativeProfileFilter, this.addToLoaded(MutablePropertySources::addFirst, true));
-    this.addLoadedPropertySources();
+###### [4.2.1.1.4.2 开始加载配置文件](./4.2.1.1.4.2 加载配置文件.md)
+
+#### 4.2.1.2  调用7个监听中的AnsiOutputApplicationListener类
+
+```java
+public void onApplicationEvent(ApplicationEnvironmentPreparedEvent event) {
+    ConfigurableEnvironment environment = event.getEnvironment();
+    Binder.get(environment).bind("spring.output.ansi.enabled", Enabled.class).ifBound(AnsiOutput::setEnabled);
+    AnsiOutput.setConsoleAvailable((Boolean)environment.getProperty("spring.output.ansi.console-available", Boolean.class));
 }
-//2 
-private void load(ConfigFileApplicationListener.Profile profile, ConfigFileApplicationListener.DocumentFilterFactory filterFactory, ConfigFileApplicationListener.DocumentConsumer consumer) {
-    //2.1
-    this.getSearchLocations().forEach((location) -> {
-        boolean isFolder = location.endsWith("/");
-        Set<String> names = isFolder ? this.getSearchNames() : ConfigFileApplicationListener.NO_SEARCH_NAMES;
-        names.forEach((name) -> {
-            //2.2 
-            this.load(location, name, profile, filterFactory, consumer);
-        });
-    });
-}
-//2.1 如果设置了spring.config.location，则指定扫描的配置文件路径，commaDelimitedListToStringArray（用逗号隔开可以表示多个路径）
-private Set<String> getSearchLocations() {
-    if (this.environment.containsProperty("spring.config.location")) {
-        return this.getSearchLocations("spring.config.location");
-    } else {
-        Set<String> locations = this.getSearchLocations("spring.config.additional-location");
-        locations.addAll(this.asResolvedSet(ConfigFileApplicationListener.this.searchLocations, "classpath:/,classpath:/config/,file:./,file:./config/"));
-        return locations;
-    }
-}
-//2.2 
-private void load(String location, String name, ConfigFileApplicationListener.Profile profile, ConfigFileApplicationListener.DocumentFilterFactory filterFactory, ConfigFileApplicationListener.DocumentConsumer consumer) {
-    if (!StringUtils.hasText(name)) {
-        Iterator var6 = this.propertySourceLoaders.iterator();
+```
 
-        while(var6.hasNext()) {
-            PropertySourceLoader loader = (PropertySourceLoader)var6.next();
-            if (this.canLoadFileExtension(loader, location)) {
-                this.load(loader, location, profile, filterFactory.getDocumentFilter(profile), consumer);
-                return;
-            }
-        }
-    }
+#### 4.2.1.3  调用7个监听中的LoggingApplicationListener类—处理日志基本
 
-    Set<String> processed = new HashSet();
-    Iterator var14 = this.propertySourceLoaders.iterator();
-
-    while(var14.hasNext()) {
-        PropertySourceLoader loaderx = (PropertySourceLoader)var14.next();
-        String[] var9 = loaderx.getFileExtensions();
-        int var10 = var9.length;
-
-        for(int var11 = 0; var11 < var10; ++var11) {
-            String fileExtension = var9[var11];
-            if (processed.add(fileExtension)) {
-                //如果有prifile(location)有值，路径加上prifile
-                this.loadForFileExtension(loaderx, location + name, "." + fileExtension, profile, filterFactory, consumer);
-            }
-        }
-    }
-}
-//1
-private void initializeProfiles() {
-    this.profiles.add((Object)null);
-    //找到PropertySource中的spring.profiles.active，spring.profiles.active的key对应的Profile
-    Set<ConfigFileApplicationListener.Profile> activatedViaProperty = this.getProfilesActivatedViaProperty();
-    //0
-    this.profiles.addAll(this.getOtherActiveProfiles(activatedViaProperty));
-    this.addActiveProfiles(activatedViaProperty);
-    if (this.profiles.size() == 1) {
-        String[] var2 = this.environment.getDefaultProfiles();
-        int var3 = var2.length;
-
-        for(int var4 = 0; var4 < var3; ++var4) {
-            String defaultProfileName = var2[var4];
-            ConfigFileApplicationListener.Profile defaultProfile = new ConfigFileApplicationListener.Profile(defaultProfileName, true);
-            this.profiles.add(defaultProfile);
-        }
+```java
+public void onApplicationEvent(ApplicationEvent event) {
+    if (event instanceof ApplicationStartingEvent) {
+        this.onApplicationStartingEvent((ApplicationStartingEvent)event);
+    } else if (event instanceof ApplicationEnvironmentPreparedEvent) {
+        this.onApplicationEnvironmentPreparedEvent((ApplicationEnvironmentPreparedEvent)event);
+    } else if (event instanceof ApplicationPreparedEvent) {
+        this.onApplicationPreparedEvent((ApplicationPreparedEvent)event);
+    } else if (event instanceof ContextClosedEvent && ((ContextClosedEvent)event).getApplicationContext().getParent() == null) {
+        this.onContextClosedEvent();
+    } else if (event instanceof ApplicationFailedEvent) {
+        this.onApplicationFailedEvent();
     }
 
 }
 ```
 
-### 5 打印Banner
+#### 4.2.1.4  调用7个监听中的ClasspathLoggingApplicationListener类
+
+```java
+public void onApplicationEvent(ApplicationEvent event) {
+    if (logger.isDebugEnabled()) {
+        if (event instanceof ApplicationEnvironmentPreparedEvent) {
+            logger.debug("Application started with classpath: " + this.getClasspath());
+        } else if (event instanceof ApplicationFailedEvent) {
+            logger.debug("Application failed to start with classpath: " + this.getClasspath());
+        }
+    }
+}
+```
+
+#### 4.2.1.5  调用7个监听中的BackgroundPreinitializer类
+
+```java
+public void onApplicationEvent(SpringApplicationEvent event) {
+    if (!Boolean.getBoolean("spring.backgroundpreinitializer.ignore") && event instanceof ApplicationStartingEvent && preinitializationStarted.compareAndSet(false, true)) {
+        this.performPreinitialization();
+    }
+    if ((event instanceof ApplicationReadyEvent || event instanceof ApplicationFailedEvent) && preinitializationStarted.get()) {
+        try {
+            preinitializationComplete.await();
+        } catch (InterruptedException var3) {
+            Thread.currentThread().interrupt();
+        }
+    }
+}
+```
+
+#### 4.2.1.6  调用7个监听中的DelegatingApplicationListener类
+
+```java
+public void onApplicationEvent(ApplicationEvent event) {
+    if (event instanceof ApplicationEnvironmentPreparedEvent) {
+        List<ApplicationListener<ApplicationEvent>> delegates = this.getListeners(((ApplicationEnvironmentPreparedEvent)event).getEnvironment());
+        if (delegates.isEmpty()) {
+            return;//走这里了
+        }
+        this.multicaster = new SimpleApplicationEventMulticaster();
+        Iterator var3 = delegates.iterator();
+
+        while(var3.hasNext()) {
+            ApplicationListener<ApplicationEvent> listener = (ApplicationListener)var3.next();
+            this.multicaster.addApplicationListener(listener);
+        }
+    }
+    if (this.multicaster != null) {
+        this.multicaster.multicastEvent(event);
+    }
+}
+```
+
+#### 4.2.1.7  调用7个监听中的FileEncodingApplicationListener类
+
+- 判断编解码是否强制
+
+```java
+public void onApplicationEvent(ApplicationEnvironmentPreparedEvent event) {
+    ConfigurableEnvironment environment = event.getEnvironment();
+    if (environment.containsProperty("spring.mandatory-file-encoding")) {
+        String encoding = System.getProperty("file.encoding");
+        String desired = environment.getProperty("spring.mandatory-file-encoding");
+        if (encoding != null && !desired.equalsIgnoreCase(encoding)) {
+            logger.error("System property 'file.encoding' is currently '" + encoding + "'. It should be '" + desired + "' (as defined in 'spring.mandatoryFileEncoding').");
+            logger.error("Environment variable LANG is '" + System.getenv("LANG") + "'. You could use a locale setting that matches encoding='" + desired + "'.");
+            logger.error("Environment variable LC_ALL is '" + System.getenv("LC_ALL") + "'. You could use a locale setting that matches encoding='" + desired + "'.");
+            throw new IllegalStateException("The Java Virtual Machine has not been configured to use the desired default character encoding (" + desired + ").");
+        }
+    }
+}
+```
+
+## 4.3 bindToSpringApplication：不知道干啥
+
+# 5 打印Banner
 
 ```java
 //SpringApplication：
@@ -356,7 +502,7 @@ private Banner printBanner(ConfigurableEnvironment environment) {
 }
 ```
 
-### 6 createApplicationContext()：根据应用类型创建应用上下文
+# 6 createApplicationContext()：根据应用类型创建应用上下文
 
 ```java
 //SpringApplication：
@@ -374,28 +520,34 @@ protected ConfigurableApplicationContext createApplicationContext() {
 }
 ```
 
-### 7 从Spring.factories中查找创建异常报错类
+# 7 从Spring.factories中查找创建异常报错类
 
 ```java
 ////SpringApplication：将上下文传入各个异常处理类，使得异常能在任何时候捕获上下文
 exceptionReporters = this.getSpringFactoriesInstances(SpringBootExceptionReporter.class, new Class[]{ConfigurableApplicationContext.class}, context);
 ```
 
-### 8 prepareContext()：准备上下文
+# 8 prepareContext()：准备上下文
+
+- 调用所有ApplicationContextInitializer的initializer方法
+- 通知所有的SpringApplicationRunListener监听者，Spring容器准备好了
+- 注册几个单例类，不知道干啥
+- 设置BeanDefinition是否能重复定义（后面覆盖前面），默认false
+- 通知监听者context装载完成
 
 ```java
 //SpringApplication：
 private void prepareContext(ConfigurableApplicationContext context, ConfigurableEnvironment environment, SpringApplicationRunListeners listeners, ApplicationArguments applicationArguments, Banner printedBanner) {
-    
+    //将环境设置到上下文中
     context.setEnvironment(environment);
     //如果beanNameGenerator不为null，注册beanName生成类
     //如果resourceLoader不为null，将它设置到context中
     this.postProcessApplicationContext(context);
     //调用所有ApplicatinContextInitializer的initialize方法
     //例如加载环境变量信息、注册EmbeddedServletContainerInitializedEvent的监听、注册CachingMetadataReaderFactoryPostProcessor等
-    //7.1 调用所有ApplicationContextInitializer的initializer方法
+    //8.1 调用所有ApplicationContextInitializer的initializer方法
     this.applyInitializers(context);
-    //7.2 通知所有的SpringApplicationRunListener监听者，Spring容器准备好了
+    //8.2 通知所有的SpringApplicationRunListener监听者，Spring容器准备好了
     listeners.contextPrepared(context);
     
     //根据配置情况打印了启动或运行以及profile是否配置的日志
@@ -420,11 +572,11 @@ private void prepareContext(ConfigurableApplicationContext context, Configurable
     Assert.notEmpty(sources, "Sources must not be empty");
     //和sources有关
     this.load(context, sources.toArray(new Object[0]));
-    //7.3 通知监听者context装载完成
+    //8.3 通知监听者context装载完成
     listeners.contextLoaded(context);
 }
 ```
-#### 8.1 applyInitializers()：调用所有ApplicationContextInitializer的initializer方法
+## 8.1 applyInitializers()：调用所有ApplicationContextInitializer的initializer方法
 
 ```java
 //SpringApplication：
@@ -438,7 +590,73 @@ protected void applyInitializers(ConfigurableApplicationContext context) {
     }
 }
 ```
-#### 8.2 listeners.contextPrepared()：通知所有的Run监听者，Spring容器准备好了
+### 8.1.1 调用DelegatingApplicationContextInitializer
+
+```java
+public void initialize(ConfigurableApplicationContext context) {
+    ConfigurableEnvironment environment = context.getEnvironment();
+    List<Class<?>> initializerClasses = this.getInitializerClasses(environment);
+    //如果环境中有context.initializer.classes属性，应用
+    if (!initializerClasses.isEmpty()) {
+        this.applyInitializerClasses(context, initializerClasses);
+    }
+
+}
+```
+
+### 8.1.2 调用SharedMetadataReaderFactoryContextInitializer
+
+```java
+//SharedMetadataReaderFactoryContextInitializer:加入一个beanProcessor
+public void initialize(ConfigurableApplicationContext applicationContext) {
+    applicationContext.addBeanFactoryPostProcessor(new SharedMetadataReaderFactoryContextInitializer.CachingMetadataReaderFactoryPostProcessor());
+}
+```
+
+### 8.1.3 调用ContextIdApplicationContextInitializer
+
+```java
+//注册ContextIdApplicationContextInitializer
+public void initialize(ConfigurableApplicationContext applicationContext) {
+    ContextIdApplicationContextInitializer.ContextId contextId = this.getContextId(applicationContext);
+    applicationContext.setId(contextId.getId());
+    applicationContext.getBeanFactory().registerSingleton(ContextIdApplicationContextInitializer.ContextId.class.getName(), contextId);
+}
+```
+
+### 8.1.4 调用ConfigurationWarningsApplicationContextInitializer
+
+```java
+//注册ConfigurationWarningsPostProcessor
+public void initialize(ConfigurableApplicationContext context) {
+    context.addBeanFactoryPostProcessor(new ConfigurationWarningsApplicationContextInitializer.ConfigurationWarningsPostProcessor(this.getChecks()));
+}
+```
+
+### 8.1.5 调用ServerPortInfoApplicationContextInitializer
+
+```java
+//向应用上下文添加本监听器
+public void initialize(ConfigurableApplicationContext applicationContext) {
+    applicationContext.addApplicationListener(this);
+}
+```
+
+### 8.1.6 调用ConditionEvaluationReportLoggingListener
+
+```java
+//注册另一个监听器
+public void initialize(ConfigurableApplicationContext applicationContext) {
+    this.applicationContext = applicationContext;
+    applicationContext.addApplicationListener(new ConditionEvaluationReportLoggingListener.ConditionEvaluationReportListener());
+    if (applicationContext instanceof GenericApplicationContext) {
+        this.report = ConditionEvaluationReport.get(this.applicationContext.getBeanFactory());
+    }
+
+}
+```
+
+## 8.2 listeners.contextPrepared()：通知所有的Run监听者，Spring容器准备好了
 
 ```java
 //SpringApplication：
@@ -453,7 +671,7 @@ public void contextPrepared(ConfigurableApplicationContext context) {
 }
 ```
 
-#### 8.3 listeners.contextLoaded()：通知所有的Run监听者，Spring容器加载好了
+## 8.3 listeners.contextLoaded()：通知所有的Run监听者，Spring容器加载好了
 
 ```java
 //SpringApplicationRunListeners：
@@ -468,7 +686,7 @@ public void contextLoaded(ConfigurableApplicationContext context) {
 }
 ```
 
-### 9 refreshContext(context)
+# 9 refreshContext(context)—准备业务上下文
 
 ```java
 //SpringApplication：
@@ -491,7 +709,7 @@ public void refresh() throws BeansException, IllegalStateException {
         ConfigurableListableBeanFactory beanFactory = this.obtainFreshBeanFactory();
         //9.3 将context中的一些属性设置到beanFactory中
         this.prepareBeanFactory(beanFactory);
-	    //9.4 注册Scope相关的类，扫描包和注解进行注册
+	    //9.4 注册Scope相关的类
         this.postProcessBeanFactory(beanFactory);
         //9.5 和业务类、自动配置类有关
         this.invokeBeanFactoryPostProcessors(beanFactory);
@@ -515,7 +733,10 @@ public void refresh() throws BeansException, IllegalStateException {
 }
 ```
 
-#### 9.1 prepareRefresh()：初始化一些配置属性，验证配置文件
+## 9.1 prepareRefresh()：初始化一些配置属性，验证配置文件
+
+- 初始化servletContextInitParams，servletConfigInitParams如果有的话
+- 验证所有的requiredProperties是否都存在，否则报错
 
 ```java
 //AnnotationConfigServletWebServerApplicationContext
@@ -544,7 +765,9 @@ protected void prepareRefresh() {
 }
 ```
 
-##### 9.1.1 initPropertySources()：初始化servletContextInitParams，servletConfigInitParams如果有的话
+### 9.1.1 initPropertySources()：初始化servletContextInitParams，servletConfigInitParams如果有的话
+
+- 初始化servletContextInitParams，servletConfigInitParams如果有的话
 
 ```java
 //初始化servletContextInitParams，servletConfigInitParams如果有的话
@@ -576,7 +799,7 @@ public static void initServletPropertySources(MutablePropertySources sources, @N
 }
 ```
 
-##### 9.1.2 validateRequiredProperties()：验证所有的requiredProperties是否都存在，否则报错
+### 9.1.2 validateRequiredProperties()：验证所有的requiredProperties是否都存在，否则报错
 
 ```java
 //AbstractPropertyResolver
@@ -595,7 +818,7 @@ public void validateRequiredProperties() {
 }
 ```
 
-#### 9.2 obtainFreshBeanFactory()：简单获取BeanFactory
+## 9.2 obtainFreshBeanFactory()：简单获取BeanFactory
 
 ```java
 //AbstractApplicationContext：简单获取BeanFactory
@@ -606,7 +829,7 @@ protected ConfigurableListableBeanFactory obtainFreshBeanFactory() {
 }
 ```
 
-#### 9.3 prepareBeanFactory()：将context中的一些属性设置到beanFactory中
+## 9.3 prepareBeanFactory()：将context中的一些属性注册到beanFactory中
 
 ```java
 //AbstractApplicationContext
@@ -642,13 +865,14 @@ protected void prepareBeanFactory(ConfigurableListableBeanFactory beanFactory) {
 }
 ```
 
-#### 9.4 postProcessBeanFactory()：扫描包和注解，添加Web相关Processor，并向beanFactory注册几个Scope类
+## 9.4 postProcessBeanFactory()：并向beanFactory注册几个Scope类
 
 ```java
 //AnnotationConfigServletWebServerApplicationContext
 //这里的basePackages和annotatedClasses是在哪了设置的？
 protected void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) {
     super.postProcessBeanFactory(beanFactory);
+    //一般都没有吧，到这里
     //如果有basePackages，则扫描包，将包中指定的bean注入
     if (this.basePackages != null && this.basePackages.length > 0) {
         this.scanner.scan(this.basePackages);
@@ -677,176 +901,95 @@ private void registerWebApplicationScopes() {
 }
 ```
 
-#### 9.5 invokeBeanFactoryPostProcessors()：递归查找Configuration类，重要！
+## [**9.5 invokeBeanFactoryPostProcessors()：解析配置文件重要—点击链接到目的地，将所有的bean注册成beanDefinition以便后面的初始化**！](./9.5 invokeBeanFactoryPostProcessors()解析.md)
+
+## 9.6 registerBeanPostProcessors()：分类、排序、注册（注入beanFactory中）所有的BeanPostProcessors
+
+- 就是将所有的后置处理器排序，并注入到beanFactory中
 
 ```java
-//AbstractApplicationContext
-protected void invokeBeanFactoryPostProcessors(ConfigurableListableBeanFactory beanFactory) {
-    //分类并排序所有的BeanDefinitionRegistry(这里并没有注册，要到下一个方法)
-    //这里查找了业务类、自动配置类
-    //具体的单独分析：https://blog.csdn.net/liaokailin/article/details/49107209
-    //https://blog.csdn.net/qq_26000415/article/details/78917682
-    //https://www.cnblogs.com/jiaoqq/p/7678037.html
-    //https://www.jianshu.com/p/b61809506d0b
-    PostProcessorRegistrationDelegate.invokeBeanFactoryPostProcessors(beanFactory, this.getBeanFactoryPostProcessors());
-    //转载两个PostProcessor,一般不进来
-    if (beanFactory.getTempClassLoader() == null && beanFactory.containsBean("loadTimeWeaver")) {
-        beanFactory.addBeanPostProcessor(new LoadTimeWeaverAwareProcessor(beanFactory));
-        beanFactory.setTempClassLoader(new ContextTypeMatchClassLoader(beanFactory.getBeanClassLoader()));
-    }
-}
-```
-
-##### 9.5.1 invokeBeanFactoryPostProcessors()：
-
-```java
-//PostProcessorRegistrationDelegate
-public static void invokeBeanFactoryPostProcessors(ConfigurableListableBeanFactory beanFactory, List<BeanFactoryPostProcessor> beanFactoryPostProcessors) {
-    Set<String> processedBeans = new HashSet();
-    ArrayList regularPostProcessors;
-    ArrayList registryProcessors;
-    int var9;
-    ArrayList currentRegistryProcessors;
-    String[] postProcessorNames;
-    if (beanFactory instanceof BeanDefinitionRegistry) {
-        BeanDefinitionRegistry registry = (BeanDefinitionRegistry)beanFactory;
-        regularPostProcessors = new ArrayList();
-        registryProcessors = new ArrayList();
-        Iterator var6 = beanFactoryPostProcessors.iterator();
-        //注册postProcessor
-        while(var6.hasNext()) {
-            BeanFactoryPostProcessor postProcessor = (BeanFactoryPostProcessor)var6.next();
-            if (postProcessor instanceof BeanDefinitionRegistryPostProcessor) {
-                BeanDefinitionRegistryPostProcessor registryProcessor = (BeanDefinitionRegistryPostProcessor)postProcessor;
-                registryProcessor.postProcessBeanDefinitionRegistry(registry);
-                registryProcessors.add(registryProcessor);
-            } else {
-                regularPostProcessors.add(postProcessor);
-            }
-        }
-
-        currentRegistryProcessors = new ArrayList();
-        postProcessorNames = beanFactory.getBeanNamesForType(BeanDefinitionRegistryPostProcessor.class, true, false);
-        String[] var16 = postProcessorNames;
-        var9 = postProcessorNames.length;
-
-        int var10;
-        String ppName;
-        for(var10 = 0; var10 < var9; ++var10) {
-            ppName = var16[var10];
-            if (beanFactory.isTypeMatch(ppName, PriorityOrdered.class)) {
-                currentRegistryProcessors.add(beanFactory.getBean(ppName, BeanDefinitionRegistryPostProcessor.class));
-                processedBeans.add(ppName);
-            }
-        }
-        //currentRegistryProcessors有个关键的类：ConfigurationClassPostProcessor
-        sortPostProcessors(currentRegistryProcessors, beanFactory);
-        registryProcessors.addAll(currentRegistryProcessors);
-        //9.5.1.1 关键：这里注册业务了、自动配置类
-        invokeBeanDefinitionRegistryPostProcessors(currentRegistryProcessors, registry);
-        currentRegistryProcessors.clear();
-        postProcessorNames = beanFactory.getBeanNamesForType(BeanDefinitionRegistryPostProcessor.class, true, false);
-        var16 = postProcessorNames;
-        var9 = postProcessorNames.length;
-
-        for(var10 = 0; var10 < var9; ++var10) {
-            ppName = var16[var10];
-            if (!processedBeans.contains(ppName) && beanFactory.isTypeMatch(ppName, Ordered.class)) {
-                currentRegistryProcessors.add(beanFactory.getBean(ppName, BeanDefinitionRegistryPostProcessor.class));
-                processedBeans.add(ppName);
-            }
-        }
-
-        sortPostProcessors(currentRegistryProcessors, beanFactory);
-        registryProcessors.addAll(currentRegistryProcessors);
-        invokeBeanDefinitionRegistryPostProcessors(currentRegistryProcessors, registry);
-        currentRegistryProcessors.clear();
-        boolean reiterate = true;
-
-        while(reiterate) {
-            reiterate = false;
-            postProcessorNames = beanFactory.getBeanNamesForType(BeanDefinitionRegistryPostProcessor.class, true, false);
-            String[] var19 = postProcessorNames;
-            var10 = postProcessorNames.length;
-
-            for(int var26 = 0; var26 < var10; ++var26) {
-                String ppName = var19[var26];
-                if (!processedBeans.contains(ppName)) {
-                    currentRegistryProcessors.add(beanFactory.getBean(ppName, BeanDefinitionRegistryPostProcessor.class));
-                    processedBeans.add(ppName);
-                    reiterate = true;
-                }
-            }
-
-            sortPostProcessors(currentRegistryProcessors, beanFactory);
-            registryProcessors.addAll(currentRegistryProcessors);
-            invokeBeanDefinitionRegistryPostProcessors(currentRegistryProcessors, registry);
-            currentRegistryProcessors.clear();
-        }
-
-        invokeBeanFactoryPostProcessors((Collection)registryProcessors, (ConfigurableListableBeanFactory)beanFactory);
-        invokeBeanFactoryPostProcessors((Collection)regularPostProcessors, (ConfigurableListableBeanFactory)beanFactory);
-    } else {
-        invokeBeanFactoryPostProcessors((Collection)beanFactoryPostProcessors, (ConfigurableListableBeanFactory)beanFactory);
-    }
-
-    String[] postProcessorNames = beanFactory.getBeanNamesForType(BeanFactoryPostProcessor.class, true, false);
-    regularPostProcessors = new ArrayList();
-    registryProcessors = new ArrayList();
-    currentRegistryProcessors = new ArrayList();
-    postProcessorNames = postProcessorNames;
-    int var20 = postProcessorNames.length;
-
+//组成一些后置处理器
+public static void registerBeanPostProcessors(ConfigurableListableBeanFactory beanFactory, AbstractApplicationContext applicationContext) {
+    //获取后置处理器的名字
+    String[] postProcessorNames = beanFactory.getBeanNamesForType(BeanPostProcessor.class, true, false);
+    int beanProcessorTargetCount = beanFactory.getBeanPostProcessorCount() + 1 + postProcessorNames.length;
+    //加入一个新的后置处理器
+    beanFactory.addBeanPostProcessor(new PostProcessorRegistrationDelegate.BeanPostProcessorChecker(beanFactory, beanProcessorTargetCount));
+    //用于分类后置处理器
+    List<BeanPostProcessor> priorityOrderedPostProcessors = new ArrayList();
+    List<BeanPostProcessor> internalPostProcessors = new ArrayList();
+    List<String> orderedPostProcessorNames = new ArrayList();
+    List<String> nonOrderedPostProcessorNames = new ArrayList();
+    
+    //遍历后置处理器并开始分类
+    String[] var8 = postProcessorNames;
+    int var9 = postProcessorNames.length;
     String ppName;
-    for(var9 = 0; var9 < var20; ++var9) {
-        ppName = postProcessorNames[var9];
-        if (!processedBeans.contains(ppName)) {
-            if (beanFactory.isTypeMatch(ppName, PriorityOrdered.class)) {
-                regularPostProcessors.add(beanFactory.getBean(ppName, BeanFactoryPostProcessor.class));
-            } else if (beanFactory.isTypeMatch(ppName, Ordered.class)) {
-                registryProcessors.add(ppName);
-            } else {
-                currentRegistryProcessors.add(ppName);
+    BeanPostProcessor pp;
+    for(int var10 = 0; var10 < var9; ++var10) {
+        ppName = var8[var10];
+        if (beanFactory.isTypeMatch(ppName, PriorityOrdered.class)) {
+            //初始化后置处理器，并加入
+            pp = (BeanPostProcessor)beanFactory.getBean(ppName, BeanPostProcessor.class);
+            priorityOrderedPostProcessors.add(pp);
+            if (pp instanceof MergedBeanDefinitionPostProcessor) {
+                //第一次加入
+                internalPostProcessors.add(pp);
             }
+        } else if (beanFactory.isTypeMatch(ppName, Ordered.class)) {
+            orderedPostProcessorNames.add(ppName);
+        } else {
+            nonOrderedPostProcessorNames.add(ppName);
         }
     }
-
-    sortPostProcessors(regularPostProcessors, beanFactory);
-    invokeBeanFactoryPostProcessors((Collection)regularPostProcessors, (ConfigurableListableBeanFactory)beanFactory);
-    List<BeanFactoryPostProcessor> orderedPostProcessors = new ArrayList();
-    Iterator var21 = registryProcessors.iterator();
-
-    while(var21.hasNext()) {
-        String postProcessorName = (String)var21.next();
-        orderedPostProcessors.add(beanFactory.getBean(postProcessorName, BeanFactoryPostProcessor.class));
+	//a 排序并调用priorityOrderedPostProcessors:3个
+    //AutowiredAnnotation~/CommonAnnotation~/ConfigurationPropertiesBinding~
+    sortPostProcessors(priorityOrderedPostProcessors, beanFactory);
+    registerBeanPostProcessors(beanFactory, (List)priorityOrderedPostProcessors);
+    
+    //初始化得到orderedPostProcessors：4个
+    //methodValidation~/dataSourceInitializer~/persistenceException~/AutoProxy~
+    List<BeanPostProcessor> orderedPostProcessors = new ArrayList();
+    Iterator var14 = orderedPostProcessorNames.iterator();
+    while(var14.hasNext()) {
+        String ppName = (String)var14.next();
+        //初始化
+        BeanPostProcessor pp = (BeanPostProcessor)beanFactory.getBean(ppName, BeanPostProcessor.class);
+        orderedPostProcessors.add(pp);
+        if (pp instanceof MergedBeanDefinitionPostProcessor) {
+            //第二次加入
+            internalPostProcessors.add(pp);
+        }
     }
-
+	//b 排序并调用orderedPostProcessors	
     sortPostProcessors(orderedPostProcessors, beanFactory);
-    invokeBeanFactoryPostProcessors((Collection)orderedPostProcessors, (ConfigurableListableBeanFactory)beanFactory);
-    List<BeanFactoryPostProcessor> nonOrderedPostProcessors = new ArrayList();
-    Iterator var24 = currentRegistryProcessors.iterator();
-
-    while(var24.hasNext()) {
-        ppName = (String)var24.next();
-        nonOrderedPostProcessors.add(beanFactory.getBean(ppName, BeanFactoryPostProcessor.class));
+    registerBeanPostProcessors(beanFactory, (List)orderedPostProcessors);
+    
+    //初始化得到nonOrderedPostProcessors
+    List<BeanPostProcessor> nonOrderedPostProcessors = new ArrayList();
+    Iterator var17 = nonOrderedPostProcessorNames.iterator();
+    while(var17.hasNext()) {
+        ppName = (String)var17.next();
+        pp = (BeanPostProcessor)beanFactory.getBean(ppName, BeanPostProcessor.class);
+        nonOrderedPostProcessors.add(pp);
+        if (pp instanceof MergedBeanDefinitionPostProcessor) {
+            //第三次加入
+            internalPostProcessors.add(pp);
+        }
     }
-
-    invokeBeanFactoryPostProcessors((Collection)nonOrderedPostProcessors, (ConfigurableListableBeanFactory)beanFactory);
-    beanFactory.clearMetadataCache();
+    //c 调用nonOrderedPostProcessors
+    registerBeanPostProcessors(beanFactory, (List)nonOrderedPostProcessors);
+    
+	//d 排序并调用internalPostProcessors	
+    sortPostProcessors(internalPostProcessors, beanFactory);
+    registerBeanPostProcessors(beanFactory, (List)internalPostProcessors);
+    
+    //加入另一个后置处理器
+    beanFactory.addBeanPostProcessor(new ApplicationListenerDetector(applicationContext));
 }
 ```
 
-#### 9.6 registerBeanPostProcessors()：分类、排序、注册（注入）所有的BeanPostProcessors
-
-```java
-//AbstractApplicationContext
-//分类、排序、注册（注入）所有的BeanPostProcessors
-protected void registerBeanPostProcessors(ConfigurableListableBeanFactory beanFactory) {
-    PostProcessorRegistrationDelegate.registerBeanPostProcessors(beanFactory, this);
-}
-```
-
-#### 9.7 initMessageSource()：国际化
+## 9.7 initMessageSource()：国际化
 
 ```java
 //主要注册了下面这个类，说是用来国际化的
@@ -854,7 +997,7 @@ protected void registerBeanPostProcessors(ConfigurableListableBeanFactory beanFa
 beanFactory.registerSingleton("messageSource", this.messageSource);
 ```
 
-#### 9.8 initApplicationEventMulticaster()：注册多播事件
+## 9.8 initApplicationEventMulticaster()：注册多播事件
 
 ```java
 //主要就是注册下面这个类，事件多播？
@@ -863,7 +1006,7 @@ this.applicationEventMulticaster = new SimpleApplicationEventMulticaster(beanFac
 beanFactory.registerSingleton("applicationEventMulticaster", this.applicationEventMulticaster);
 ```
 
-#### 9.9 onRefresh()：主要是创建并初始化Web容器
+## 9.9 onRefresh()：主要是创建并初始化Web容器
 
 ```java
 ServletWebServerApplicationContext
@@ -883,13 +1026,15 @@ private void createWebServer() {
 	if (webServer == null && servletContext == null) {
 		//获取ServletWebServerFactory实例
 		//内部：String[] beanNames = this.getBeanFactory().getBeanNamesForType(ServletWebServerFactory.class);获取容器，根据引入的包的不同，可以创建tomcat或jetty等web容器
+		//初始化一个ServletWebServerFactory
 		ServletWebServerFactory factory = this.getWebServerFactory();
 		//如果是tomcat就到tomcatSevletWebServerFactory中，同理jetty等
 		this.webServer = factory.getWebServer(new ServletContextInitializer[]						{this.getSelfInitializer()});
 	} else if (servletContext != null) {//如果不为null，从这里创建容器，一般不走这
 		this.getSelfInitializer().onStartup(servletContext);
 	}
-	//1
+	//1初始化ServletPropertySources
+	//servletContextInitParams、servletConfigInitParams有关
 	this.initPropertySources();
 }
 
@@ -940,27 +1085,30 @@ public static void initServletPropertySources(MutablePropertySources sources, @N
 }
 ```
 
-#### 9.10 registerListeners()：向多播事件中注册3个监听者
+## 9.10 registerListeners()：向多播事件中注册几个监听者
 
 ```java
 //主要就做了下面3件事情
 this.getApplicationEventMulticaster().addApplicationListener(listener);
 this.getApplicationEventMulticaster().addApplicationListenerBean(listenerBeanName);
+//需要发布的，这里为0
 this.getApplicationEventMulticaster().multicastEvent(earlyEvent);
 ```
 
-#### 9.11 finishBeanFactoryInitialization()：初始化单例
+## **9.11 finishBeanFactoryInitialization()：初始化非懒加载beanDefinition**
 
 ```java
 protected void finishBeanFactoryInitialization(ConfigurableListableBeanFactory beanFactory) {
     if (beanFactory.containsBean("conversionService") && beanFactory.isTypeMatch("conversionService", ConversionService.class)) {
     beanFactory.setConversionService((ConversionService)beanFactory.getBean("conversionService", ConversionService.class));
     }
+    //不进去
     if (!beanFactory.hasEmbeddedValueResolver()) {
         beanFactory.addEmbeddedValueResolver((strVal) -> {
             return this.getEnvironment().resolvePlaceholders(strVal);
         });
     }
+    //没有
     String[] weaverAwareNames = beanFactory.getBeanNamesForType(LoadTimeWeaverAware.class, false, false);
     String[] var3 = weaverAwareNames;
     int var4 = weaverAwareNames.length;
@@ -971,8 +1119,7 @@ protected void finishBeanFactoryInitialization(ConfigurableListableBeanFactory b
     beanFactory.setTempClassLoader((ClassLoader)null);
     //将所有的beanName，放到一个数组中存起来
     beanFactory.freezeConfiguration();
-    //在这之前注册的都是一些系统要用的bean，如：ApplicationContext等；这里注册开始注册其它的bean了
-    //第三方的autoConfiguration的类，也是在这里才初始化的，在上面将它们的beanName都取出来了，在这里才注册
+    //初始化一些类，isEagerInit==true
     beanFactory.preInstantiateSingletons();
 }
 //
@@ -1048,7 +1195,7 @@ public void preInstantiateSingletons() throws BeansException {
 }
 ```
 
-#### 9.12 finishRefresh()：初始化生命周期，开启Web容器
+## 9.12 finishRefresh()：初始化生命周期，开启Web容器
 
 ```java
 //ServletWebServerApplicationContext
@@ -1086,7 +1233,7 @@ private void startBeans(boolean autoStartupOnly) {
 }
 ```
 
-#### 9.13 resetCommonCaches()
+## 9.13 resetCommonCaches()
 
 ```java
 //AbstractApplicationContext
@@ -1098,16 +1245,17 @@ protected void resetCommonCaches() {
 }
 ```
 
-#### 9.14 registerShutdownHook()：注册应用关闭时的钩子
+## 9.14 registerShutdownHook()：注册应用关闭时的销毁流程
 
 ```java
 //AbstractApplicationContext
+//可以继承这个，实现自己的钩子
 public void registerShutdownHook() {
     if (this.shutdownHook == null) {
         this.shutdownHook = new Thread() {
             public void run() {
                 synchronized(AbstractApplicationContext.this.startupShutdownMonitor) {
-                    AbstractApplicationContext.this.doClose();
+                    AbstractApplicationContext.this.doClose();//注册销毁流程
                 }
             }
         };
@@ -1117,7 +1265,7 @@ public void registerShutdownHook() {
 }
 ```
 
-### 10 afterRefresh()：空实现
+# 10 afterRefresh()：空实现
 
 ```java
 //SpringApplication
@@ -1125,7 +1273,7 @@ protected void afterRefresh(ConfigurableApplicationContext context, ApplicationA
 }
 ```
 
-### 11 listeners.started()：通知Run监听者应用已开启
+# 11 listeners.started()：通知Run监听者应用已开启
 
 ```java
 //SpringApplicationRunListeners
@@ -1140,7 +1288,7 @@ public void started(ConfigurableApplicationContext context) {
 }
 ```
 
-### 12 callRunners()：调用 ApplicationRunner 或者 CommandLineRunner 的运行方法
+# 12 callRunners()：调用 ApplicationRunner 或者 CommandLineRunner 的运行方法
 
 ```java
 //SpringApplication
@@ -1165,7 +1313,7 @@ private void callRunners(ApplicationContext context, ApplicationArguments args) 
 }
 ```
 
-### 13 listeners.running()：通知Run监听者应用已运行
+# 13 listeners.running()：通知Run监听者应用已运行
 
 ```java
 //SpringApplicationRunListeners
@@ -1197,17 +1345,89 @@ BeanDefinitionLoader(BeanDefinitionRegistry registry, Object... sources) {
 }
 ```
 
+# 14 销毁
 
+- 关闭lifecycleProcessor实例
+- 销毁beanFactory中所有的实例
 
+```java
+//AbstractApplicationContext
+public void close() {
+    Object var1 = this.startupShutdownMonitor;
+    synchronized(this.startupShutdownMonitor) {
+        //在这里执行
+        this.doClose();
+        if (this.shutdownHook != null) {
+            try {
+                Runtime.getRuntime().removeShutdownHook(this.shutdownHook);
+            } catch (IllegalStateException var4) {
+                ;
+            }
+        }
 
+    }
+}
+//开始销毁
+protected void doClose() {
+    //确保只有一个线程进入
+    if (this.active.get() && this.closed.compareAndSet(false, true)) {
 
+        //关闭lifecycleProcessor实例
+        this.lifecycleProcessor.onClose();
 
+		//销毁beanFactory中所有的实例
+        this.destroyBeans();
+        //关闭bean工程
+        this.closeBeanFactory();
+        this.onClose();
+        this.active.set(false);
+    }
 
-https://blog.csdn.net/liaokailin/article/details/49107209
-https://blog.csdn.net/qq_26000415/article/details/78917682
-https://www.cnblogs.com/jiaoqq/p/7678037.html
-https://www.jianshu.com/p/b61809506d0b
+}
+```
+## 14.1 销毁beanFactory中所有的实例
 
-https://www.cnblogs.com/saaav/p/6292524.html
+```java
+protected void destroyBeans() {
+    this.getBeanFactory().destroySingletons();
+}
+public void destroySingletons() {
+    super.destroySingletons();//主要是这个
+}
+public void destroySingletons() {
+    Map var2 = this.disposableBeans;//取出所有的disposableBeans
+    String[] disposableBeanNames;
+    synchronized(this.disposableBeans) {
+        disposableBeanNames = StringUtils.toStringArray(this.disposableBeans.keySet());
+    }
+	//遍历销毁所有的disposableBeans
+    for(int i = disposableBeanNames.length - 1; i >= 0; --i) {
+        this.destroySingleton(disposableBeanNames[i]);
+    }
+}
+public void destroySingleton(String beanName) {
+    synchronized(this.disposableBeans) {
+        //pop
+        disposableBean = (DisposableBean)this.disposableBeans.remove(beanName);
+    }
+    this.destroyBean(beanName, disposableBean);
+}
+protected void destroyBean(String beanName, @Nullable DisposableBean bean) {
+    bean.destroy();//即调用DisposableBean接口的destroy
+}
+//实现了DisposableBean接口
+public interface DisposableBean {
+    void destroy() throws Exception;
+}
+```
 
-https://www.cnblogs.com/saaav/tag/spring%20boot/
+# 15 参考文献
+
+spring-boot:2.1.1.RELEASE
+
+[spring boot实战(第十篇)Spring boot Bean加载源码分析](https://blog.csdn.net/liaokailin/article/details/49107209)
+[spring boot 源码解析11-ConfigurationClassPostProcessor类加载解析](https://blog.csdn.net/qq_26000415/article/details/78917682)
+[Spring如何加载和解析@Configuration标签](https://www.cnblogs.com/jiaoqq/p/7678037.html)
+[spring容器加载分析 三Configuration类解析](https://www.jianshu.com/p/b61809506d0b)
+[Spring Boot启动过程（二）](https://www.cnblogs.com/saaav/p/6292524.html)
+[内置Tomcat启动](https://www.cnblogs.com/saaav/p/6323350.html#4245351)

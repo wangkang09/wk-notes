@@ -275,7 +275,81 @@ private void cancelAcquire(Node node) {
 # 2 获取写锁
 
 ```java
+public final void acquire(int arg) {
+    //2.1 尝试获取锁
+    //2.2 加入AQS队列
+    //2.3 先重新尝试获取锁，不成功在挂起
+    if (!tryAcquire(arg) &&
+        acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
+        selfInterrupt();//设置中断属性
+}
+```
 
+## 2.1 尝试获取写锁
+
+```java
+protected final boolean tryAcquire(int acquires) {
+
+    Thread current = Thread.currentThread();
+    int c = getState();
+    int w = exclusiveCount(c);
+    if (c != 0) {
+        // (Note: if c != 0 and w == 0 then shared count != 0)
+        if (w == 0 || current != getExclusiveOwnerThread())
+            return false;//如果有写锁了，直接获取失败返回
+        if (w + exclusiveCount(acquires) > MAX_COUNT)
+            throw new Error("Maximum lock count exceeded");
+        // Reentrant acquire
+        setState(c + acquires);//获取重入锁，成功返回
+        return true;
+    }
+    //2.1.1 判断写锁是否应该阻塞
+    if (writerShouldBlock() ||
+        !compareAndSetState(c, c + acquires))
+        return false;//如果应该或设置状态出错都获取失败返回
+    setExclusiveOwnerThread(current);
+    return true;//获取成功
+}
+```
+
+### 2.1.1 判断写锁是否应该阻塞
+
+```java
+//非公平锁直接返回失败
+final boolean writerShouldBlock() {
+    return false; // writers can always barge
+}
+//公平锁，如果有前一个节点，则应该阻塞，直接返回
+//如果没有，尝试设置state，成功则获取到锁，失败则获取失败
+final boolean writerShouldBlock() {
+	return hasQueuedPredecessors();
+}
+```
+
+## 2.2 将当前节点加入等待队列
+
+```java
+private Node addWaiter(Node mode) {
+    Node node = new Node(Thread.currentThread(), mode);
+    // Try the fast path of enq; backup to full enq on failure
+    //如果tail不为null，直接CAS将当前节点设置到尾部，设置成功直接返回
+    Node pred = tail;
+    if (pred != null) {
+        node.prev = pred;
+        if (compareAndSetTail(pred, node)) {
+            pred.next = node;
+            return node;
+        }
+    }
+    //2.2.1不成功，再循环CAS设置
+    enq(node);
+    return node;
+}
+```
+
+### 2.2.1简单的CAS不成功，再循环CAS将当前节点设置到队列尾部
+
+```java
 //当获取写锁失败后，会将写线程加入队列
 private Node enq(final Node node) {//这里的node类型是exclude，读锁是SHARED
     //尾插法
@@ -294,4 +368,144 @@ private Node enq(final Node node) {//这里的node类型是exclude，读锁是SH
     }
 }
 ```
+
+## 2.3 再一次尝试获取锁，不成功挂机当前节点
+
+```java
+//和读操作不一样，因为这里已经将当前节点加入队列了
+//基本上和其它锁一样
+final boolean acquireQueued(final Node node, int arg) {
+    boolean failed = true;
+    try {
+        boolean interrupted = false;
+        for (;;) {
+            final Node p = node.predecessor();
+            //首先判断当前节点是否为头结点，如果是再一次尝试获取锁，成功则直接返回
+            if (p == head && tryAcquire(arg)) {
+                setHead(node);
+                p.next = null; // help GC
+                failed = false;
+                return interrupted;
+            }
+            //不成功判断前一节点是否是SIGNAL节点
+            if (shouldParkAfterFailedAcquire(p, node) &&
+                parkAndCheckInterrupt())
+                interrupted = true;
+        }
+    } finally {
+        if (failed)
+            cancelAcquire(node);
+    }
+}
+```
+
+# 3 释放读锁
+
+```java
+public final boolean releaseShared(int arg) {
+    //3.1尝试释放
+    if (tryReleaseShared(arg)) {
+        //3.2释放
+        doReleaseShared();
+        return true;
+    }
+    return false;
+}
+```
+
+## 3.1 尝试释放读锁
+
+```java
+protected final boolean tryReleaseShared(int unused) {
+    //重入锁-1
+    Thread current = Thread.currentThread();
+    if (firstReader == current) {
+        // assert firstReaderHoldCount > 0;
+        if (firstReaderHoldCount == 1)
+            firstReader = null;
+        else
+            firstReaderHoldCount--;
+    } else {
+        HoldCounter rh = cachedHoldCounter;
+        if (rh == null || rh.tid != getThreadId(current))
+            rh = readHolds.get();
+        int count = rh.count;
+        if (count <= 1) {
+            readHolds.remove();
+            if (count <= 0)
+                throw unmatchedUnlockException();
+        }
+        --rh.count;
+    }
+    //循环CAS设置状态
+    for (;;) {
+        int c = getState();
+        int nextc = c - SHARED_UNIT;
+        if (compareAndSetState(c, nextc))
+            // Releasing the read lock has no effect on readers,
+            // but it may allow waiting writers to proceed if
+            // both read and write locks are now free.
+            return nextc == 0;//如果设置nextc不为0，则锁释放失败，因为重入嘛！
+    }
+}
+```
+
+## 3.2 如果重入为0了，则正式释放读锁，唤醒头结点！
+
+```java
+//重入为0是，唤醒头结点
+private void doReleaseShared() {
+    for (;;) {
+        Node h = head;
+        if (h != null && h != tail) {
+            int ws = h.waitStatus;
+            if (ws == Node.SIGNAL) {
+                if (!compareAndSetWaitStatus(h, Node.SIGNAL, 0))
+                    continue;            // loop to recheck cases
+                unparkSuccessor(h);//唤醒头结点
+            }
+            else if (ws == 0 &&
+                     !compareAndSetWaitStatus(h, 0, Node.PROPAGATE))
+                continue;                // loop on failed CAS
+        }
+        //如果头结点没变，返回
+        //可能因为别的线程导致头结点变了，则继续唤醒头结点
+        if (h == head)                   // loop if head changed
+            break;
+    }
+}
+```
+
+# 4 释放写锁，
+
+```java
+public final boolean release(int arg) {
+    //4.1 尝试释放写锁，重入次数减1，如果为0，则返回true
+    if (tryRelease(arg)) {
+        Node h = head;
+        if (h != null && h.waitStatus != 0)
+            unparkSuccessor(h);//释放成功唤醒头结点
+        return true;
+    }
+    return false;
+}
+```
+
+## 4.1 尝试释放写锁，重入次数减1，如果为0，则返回true
+
+```java
+protected final boolean tryRelease(int releases) {
+    //如果持有写锁的不是当前线程，锁状态肯定有问题呀
+    if (!isHeldExclusively())
+        throw new IllegalMonitorStateException();
+    int nextc = getState() - releases;
+    boolean free = exclusiveCount(nextc) == 0;//如果重入次数为0，则可以释放锁
+    if (free)
+        setExclusiveOwnerThread(null);
+    setState(nextc);//设置状态
+    return free;
+}
+```
+
+## 4.2 如果4.1返回true，则正式唤醒头结点！
 
