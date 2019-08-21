@@ -1,3 +1,4 @@
+[TOC]
 
 # 添加到工作区的文件怎么撤销（添加到工作区了）
 
@@ -131,3 +132,15 @@ git pull <远程主机> <远程分支>:<本地分支>
 git pull origin master:test # 将远程master分支，拉取并合并到本地test分支中
 
 git pull origin master # 将远程master分支，拉取并合并到当前分支
+
+
+
+# 本地创建仓库，并和远程仓库关联
+
+```
+git init
+git add README.md
+git commit -m "first commit"
+git remote add origin https://github.com/wangkang09/sentinel-test.git
+git push -u origin master
+```
